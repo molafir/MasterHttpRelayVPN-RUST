@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
@@ -38,7 +39,40 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install MinGW toolchain
+      # eframe needs a few system libs on Linux for window management, keyboard,
+      # and OpenGL/X11/Wayland. We install them on the Ubuntu runners regardless
+      # of arch so both CLI-only and UI builds succeed.
+      - name: Install Linux eframe system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libx11-dev \
+            libgl1-mesa-dev libglib2.0-dev libgtk-3-dev
+
+      - name: Install aarch64 cross-compile toolchain (Linux only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo sed -i 's#^deb http#deb [arch=amd64] http#' /etc/apt/sources.list || true
+          echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse' | sudo tee /etc/apt/sources.list.d/arm64.list
+          echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse' | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu \
+            libxkbcommon-dev:arm64 \
+            libwayland-dev:arm64 \
+            libxcb1-dev:arm64 libxcb-render0-dev:arm64 libxcb-shape0-dev:arm64 libxcb-xfixes0-dev:arm64 \
+            libx11-dev:arm64 \
+            libgl1-mesa-dev:arm64 libglib2.0-dev:arm64 libgtk-3-dev:arm64 || true
+          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+
+      - name: Install Windows MinGW toolchain
         if: matrix.target == 'x86_64-pc-windows-gnu'
         id: msys2
         uses: msys2/setup-msys2@v2
@@ -47,15 +81,7 @@ jobs:
           update: true
           install: mingw-w64-x86_64-gcc
 
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
-          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
-
-      - name: Configure GNU linker
+      - name: Configure Windows GNU linker
         if: matrix.target == 'x86_64-pc-windows-gnu'
         shell: pwsh
         run: |
@@ -64,27 +90,69 @@ jobs:
           Add-Content -Path $env:USERPROFILE/.cargo/config.toml -Value '[target.x86_64-pc-windows-gnu]'
           Add-Content -Path $env:USERPROFILE/.cargo/config.toml -Value "linker = '$gcc'"
 
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build CLI
+        run: cargo build --release --target ${{ matrix.target }} --bin mhrv-rs
+
+      # UI build: we try to build the UI binary on every platform. If it fails
+      # on cross-compile for linux-arm64 (missing arm64 system libs cross),
+      # we still ship the CLI.
+      - name: Build UI
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        run: cargo build --release --target ${{ matrix.target }} --features ui --bin mhrv-rs-ui
+
+      - name: Try UI on aarch64-linux (best effort)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        continue-on-error: true
+        run: cargo build --release --target ${{ matrix.target }} --features ui --bin mhrv-rs-ui
 
       - name: Package (unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/mhrv-rs dist/${{ matrix.name }}
-          chmod +x dist/${{ matrix.name }}
+          cp target/${{ matrix.target }}/release/mhrv-rs dist/mhrv-rs
+          chmod +x dist/mhrv-rs
+          if [ -f target/${{ matrix.target }}/release/mhrv-rs-ui ]; then
+            cp target/${{ matrix.target }}/release/mhrv-rs-ui dist/mhrv-rs-ui
+            chmod +x dist/mhrv-rs-ui
+          fi
+
+      - name: Build macOS .app bundle
+        if: runner.os == 'macOS'
+        run: |
+          VER="${GITHUB_REF#refs/tags/v}"
+          ./assets/macos/build-app.sh dist/mhrv-rs-ui "$VER" dist
+          # Make a clean zip of just the .app for the release
+          cd dist
+          zip -qry "${{ matrix.name }}-app.zip" mhrv-rs.app
 
       - name: Package (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist
-          Copy-Item target/${{ matrix.target }}/release/mhrv-rs.exe dist/${{ matrix.name }}.exe
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/mhrv-rs.exe dist/mhrv-rs.exe
+          if (Test-Path target/${{ matrix.target }}/release/mhrv-rs-ui.exe) {
+            Copy-Item target/${{ matrix.target }}/release/mhrv-rs-ui.exe dist/mhrv-rs-ui.exe
+          }
+
+      - name: Make archive
+        shell: bash
+        run: |
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a -tzip "${{ matrix.name }}.zip" mhrv-rs.exe mhrv-rs-ui.exe
+          else
+            tar czf "${{ matrix.name }}.tar.gz" mhrv-rs mhrv-rs-ui 2>/dev/null || tar czf "${{ matrix.name }}.tar.gz" mhrv-rs
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: dist/${{ matrix.name }}${{ runner.os == 'Windows' && '.exe' || '' }}
+          path: |
+            dist/${{ matrix.name }}.tar.gz
+            dist/${{ matrix.name }}.zip
+            dist/${{ matrix.name }}-app.zip
+          if-no-files-found: ignore
 
   release:
     needs: build

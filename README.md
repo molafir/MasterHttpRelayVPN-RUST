@@ -29,6 +29,21 @@ The censor's DPI sees `www.google.com` in the TLS SNI and lets it through. Googl
 
 Linux (x86_64/aarch64), macOS (x86_64/aarch64), Windows (x86_64). Prebuilt binaries on the [releases page](https://github.com/therealaleph/MasterHttpRelayVPN-RUST/releases).
 
+## CLI or UI
+
+Each release ships two binaries:
+
+- **`mhrv-rs`** — the CLI. Always works. Headless servers, Docker, automation. No system deps on macOS/Windows; on Linux works even without a display server.
+- **`mhrv-rs-ui`** — the desktop UI (egui). Form for the config, Start/Stop/Test buttons, live stats, recent log. macOS releases also include `mhrv-rs.app` (double-click to launch). Linux UI requires a display server and common desktop libraries (`libxkbcommon`, `libwayland-client`, `libxcb`, `libgl`, `libx11`, `libgtk-3`); install them via your distro's package manager if missing.
+
+Config + the MITM CA live in the platform user-data dir:
+
+- macOS: `~/Library/Application Support/mhrv-rs/`
+- Linux: `~/.config/mhrv-rs/`
+- Windows: `%APPDATA%\mhrv-rs\`
+
+The CLI also falls back to `./config.json` in the current directory for backward compatibility.
+
 ## Setup Guide
 
 ### Step 1: Deploy the Apps Script relay (one-time)

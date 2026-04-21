@@ -1,30 +1,22 @@
 #![allow(dead_code)]
 
-mod cache;
-mod cert_installer;
-mod config;
-mod domain_fronter;
-mod mitm;
-mod proxy_server;
-mod scan_ips;
-mod test_cmd;
-
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
-use crate::cert_installer::{install_ca, is_ca_trusted};
-use crate::config::Config;
-use crate::mitm::{MitmCertManager, CA_CERT_FILE};
-use crate::proxy_server::ProxyServer;
+use mhrv_rs::cert_installer::{install_ca, is_ca_trusted};
+use mhrv_rs::config::Config;
+use mhrv_rs::mitm::{MitmCertManager, CA_CERT_FILE};
+use mhrv_rs::proxy_server::ProxyServer;
+use mhrv_rs::{scan_ips, test_cmd};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 struct Args {
-    config_path: PathBuf,
+    config_path: Option<PathBuf>,
     install_cert: bool,
     no_cert_check: bool,
     command: Command,
@@ -60,7 +52,7 @@ ENV:
 }
 
 fn parse_args() -> Result<Args, String> {
-    let mut config_path = PathBuf::from("config.json");
+    let mut config_path: Option<PathBuf> = None;
     let mut install_cert = false;
     let mut no_cert_check = false;
     let mut command = Command::Serve;
@@ -93,7 +85,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "-c" | "--config" => {
                 let v = it.next().ok_or_else(|| "--config needs a path".to_string())?;
-                config_path = PathBuf::from(v);
+                config_path = Some(PathBuf::from(v));
             }
             "--install-cert" => install_cert = true,
             "--no-cert-check" => no_cert_check = true,
@@ -134,9 +126,8 @@ async fn main() -> ExitCode {
     // --install-cert can run without a valid config — only needs the CA file.
     if args.install_cert {
         init_logging("info");
-        // Ensure the CA exists.
-        let base = Path::new(".");
-        if let Err(e) = MitmCertManager::new_in(base) {
+        let base = mhrv_rs::data_dir::data_dir();
+        if let Err(e) = MitmCertManager::new_in(&base) {
             eprintln!("failed to initialize CA: {}", e);
             return ExitCode::FAILURE;
         }
@@ -153,11 +144,15 @@ async fn main() -> ExitCode {
         }
     }
 
-    let config = match Config::load(&args.config_path) {
+    let config_path = mhrv_rs::data_dir::resolve_config_path(args.config_path.as_deref());
+    let config = match Config::load(&config_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{}", e);
-            eprintln!("Copy config.example.json to config.json and fill in your values.");
+            eprintln!(
+                "No valid config found. Copy config.example.json to either:\n  {}\nor run with --config <path>.",
+                config_path.display()
+            );
             return ExitCode::FAILURE;
         }
     };
@@ -193,8 +188,8 @@ async fn main() -> ExitCode {
     }
 
     // Initialize MITM manager (generates CA on first run).
-    let base = Path::new(".");
-    let mitm = match MitmCertManager::new_in(base) {
+    let base = mhrv_rs::data_dir::data_dir();
+    let mitm = match MitmCertManager::new_in(&base) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("failed to init MITM CA: {}", e);
