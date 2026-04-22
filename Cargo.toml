@@ -46,18 +46,21 @@ flate2 = "1"
 directories = "5"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
-# libc is only referenced for the RLIMIT_NOFILE bump on Unix (issue #8 —
-# OpenWRT routers ship a very low fd limit that gets hit quickly under normal
-# traffic). Already pulled in transitively via tokio, so zero new weight.
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
 # Optional UI dep: only pulled in when --features ui is set.
 eframe = { version = "0.28", default-features = false, features = [
     "default_fonts",
     "glow",
     "persistence",
 ], optional = true }
+
+# Unix-only deps. Must come after `[dependencies]` because starting a new
+# table here otherwise ends the main one — anything below it (incl. eframe)
+# would end up scoped to cfg(unix) and disappear on Windows builds.
+# libc is referenced for the RLIMIT_NOFILE bump (issue #8 — OpenWRT routers
+# ship a very low fd limit that fills up fast under browser load). Already
+# pulled in transitively via tokio, so zero new weight.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [profile.release]
 panic = "abort"
