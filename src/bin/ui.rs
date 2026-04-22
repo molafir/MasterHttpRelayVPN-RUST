@@ -772,9 +772,28 @@ impl eframe::App for App {
                 ui.small(last_test_msg);
             }
             match ca_trusted {
-                Some(true) => { ui.small("CA appears trusted."); },
-                Some(false) => { ui.small("CA is NOT trusted in the system store. Click 'Install CA' (may require admin)."); },
-                None => {},
+                Some(true) => {
+                    ui.small("CA appears trusted on this machine.");
+                }
+                Some(false) => {
+                    ui.small(
+                        "CA is NOT trusted in the system store. Click 'Install CA' \
+                         (may require admin). If you already installed it and this \
+                         still says NO, you may be on an older build — v0.8.5+ \
+                         checks the Windows store correctly.",
+                    );
+                }
+                None => {}
+            }
+            if ca_trusted.is_some() {
+                let ca_path = data_dir::data_dir().join("ca").join("ca.crt");
+                ui.small(format!(
+                    "For other devices (Android, other PCs) connecting through this proxy: \
+                     copy {} and install as a trusted root on that device. On Android 7+ \
+                     most apps ignore user-installed CAs — Firefox Android works; Chrome \
+                     and many others don't.",
+                    ca_path.display()
+                ));
             }
 
             ui.separator();

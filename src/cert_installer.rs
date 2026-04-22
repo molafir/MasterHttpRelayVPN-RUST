@@ -55,7 +55,7 @@ pub fn is_ca_trusted(path: &Path) -> bool {
     match std::env::consts::OS {
         "macos" => is_trusted_macos(),
         "linux" => is_trusted_linux(),
-        "windows" => false,
+        "windows" => is_trusted_windows(),
         _ => false,
     }
 }
@@ -302,6 +302,33 @@ fn is_trusted_linux() -> bool {
 }
 
 // ---------- Windows ----------
+
+/// Check whether our CA is present in the Windows Trusted Root store.
+/// Looks in both the user store (no admin required to install) and the
+/// machine store. Returns true if `certutil -store ... MasterHttpRelayVPN`
+/// finds a match. Issue #13 follow-up: previously this always returned
+/// false on Windows, so the Check-CA button was misleading users into
+/// reinstalling a cert that was already trusted.
+fn is_trusted_windows() -> bool {
+    // `certutil -user -store Root <name>` prints the matching cert entries
+    // on success (stdout), and exits with a non-zero code plus a "Not
+    // found" message if nothing matches. We also check stdout for the
+    // cert name because certutil in some locales returns 0 even on no-
+    // match, just with empty output.
+    for args in [
+        vec!["-user", "-store", "Root", CERT_NAME],
+        vec!["-store", "Root", CERT_NAME],
+    ] {
+        let out = Command::new("certutil").args(&args).output();
+        if let Ok(o) = out {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            if o.status.success() && stdout.to_ascii_lowercase().contains(&CERT_NAME.to_ascii_lowercase()) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 fn install_windows(cert_path: &str) -> bool {
     // Per-user Root store (no admin required).
