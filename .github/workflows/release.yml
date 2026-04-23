@@ -371,12 +371,16 @@ jobs:
   telegram:
     needs: [android, release]
     runs-on: ubuntu-latest
-    # `vars.TELEGRAM_NOTIFY_ENABLED` defaults to empty in forks; set
-    # `TELEGRAM_NOTIFY_ENABLED=1` as a repo variable to enable. In
-    # the therealaleph origin we leave it on permanently via this
-    # env fallback — the `|| ...` expression makes it default-on
-    # when the secret is present.
-    if: ${{ always() && needs.android.result == 'success' }}
+    # Gated on the repo variable `TELEGRAM_NOTIFY_ENABLED`. Default is
+    # OFF — the job skips silently unless the variable is set to the
+    # literal string "true". Toggle via:
+    #
+    #     gh variable set TELEGRAM_NOTIFY_ENABLED --body true
+    #     gh variable set TELEGRAM_NOTIFY_ENABLED --body false
+    #
+    # Keeping the machinery (script + secrets) in place so flipping
+    # the switch back on is a one-liner, not a workflow edit.
+    if: ${{ vars.TELEGRAM_NOTIFY_ENABLED == 'true' && needs.android.result == 'success' }}
     steps:
       - uses: actions/checkout@v4
 
