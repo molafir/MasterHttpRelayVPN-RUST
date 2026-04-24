@@ -375,21 +375,56 @@ jobs:
           chmod +x ./gradlew
           ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
-      - name: Rename APK with version
+      - name: Rename APKs with version
         working-directory: android
         run: |
           VER="${GITHUB_REF#refs/tags/v}"
-          SRC="app/build/outputs/apk/release/app-release.apk"
-          if [ ! -f "$SRC" ]; then
-            # Some AGP versions name it differently when the release config
-            # can't be auto-signed. Catch that up front with a clear error
-            # instead of a silent missing-artifact later.
-            echo "::error::expected $SRC to exist; actual outputs:"
+          mkdir -p ../dist
+
+          # With splits.abi enabled in build.gradle.kts (issue #136), AGP
+          # emits:
+          #   app-universal-release.apk       — all 4 ABIs bundled (~50 MB)
+          #   app-arm64-v8a-release.apk       — modern 64-bit ARM (~15 MB)
+          #   app-armeabi-v7a-release.apk     — older 32-bit ARM
+          #   app-x86_64-release.apk          — emulator on Intel Macs / Chromebook
+          #   app-x86-release.apk             — legacy 32-bit Intel emulator
+          #
+          # We publish all of them so users behind narrow / flaky
+          # censorship tunnels can grab the per-ABI APK that matches
+          # their device (~15 MB) instead of the ~50 MB universal.
+          # Universal stays named `mhrv-rs-android-universal-v*.apk` so
+          # existing download links and Telegram mirrors keep working.
+          declare -A ABI_TO_OUTNAME=(
+            ["universal"]="mhrv-rs-android-universal-v${VER}.apk"
+            ["arm64-v8a"]="mhrv-rs-android-arm64-v8a-v${VER}.apk"
+            ["armeabi-v7a"]="mhrv-rs-android-armeabi-v7a-v${VER}.apk"
+            ["x86_64"]="mhrv-rs-android-x86_64-v${VER}.apk"
+            ["x86"]="mhrv-rs-android-x86-v${VER}.apk"
+          )
+
+          missing=0
+          for abi in "${!ABI_TO_OUTNAME[@]}"; do
+            SRC="app/build/outputs/apk/release/app-${abi}-release.apk"
+            if [ -f "$SRC" ]; then
+              cp "$SRC" "../dist/${ABI_TO_OUTNAME[$abi]}"
+              ls -la "../dist/${ABI_TO_OUTNAME[$abi]}"
+            else
+              echo "::warning::missing expected APK: $SRC"
+              missing=$((missing + 1))
+            fi
+          done
+
+          # Require at least the universal — if that's missing something
+          # is genuinely broken and we should fail loud rather than ship
+          # a partial release.
+          if [ ! -f "../dist/mhrv-rs-android-universal-v${VER}.apk" ]; then
+            echo "::error::universal APK missing; actual outputs:"
             find app/build/outputs/apk -type f -name '*.apk' -print
             exit 1
           fi
-          mkdir -p ../dist
-          cp "$SRC" "../dist/mhrv-rs-android-universal-v${VER}.apk"
+          if [ "$missing" -gt 0 ]; then
+            echo "::warning::$missing per-ABI APK(s) missing; continuing with universal + whatever built"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

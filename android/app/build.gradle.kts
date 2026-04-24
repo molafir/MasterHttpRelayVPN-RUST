@@ -66,6 +66,28 @@ android {
         }
     }
 
+    // Per-ABI APK splits in addition to the universal APK.
+    //
+    // Issue #136: GitHub Releases is filtered from inside IR, and the
+    // universal APK (~50 MB, all four ABIs bundled) is the bottleneck —
+    // users on slow or unstable censorship-tunnel paths often can't
+    // pull down 50 MB reliably. Per-ABI APKs are ~15 MB each (only one
+    // copy of libmhrv_rs.so + libtun2proxy.so instead of four), which
+    // is small enough to succeed where the universal fails.
+    //
+    // Keeping the universal APK too (`isUniversalApk = true`) because
+    // existing download paths / docs / Telegram mirrors all reference
+    // the universal name — removing it would break every link in the
+    // wild. The per-ABI outputs are additive.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            isUniversalApk = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
